@@ -24,6 +24,7 @@
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS, cross_origin
 import subprocess, os, signal
+import threading
 
 BUILD_PATH = './creator' #By default we call the classics ;)
 
@@ -235,7 +236,17 @@ def do_monitor_request(request):
     target_device      = req_data['target_port']
     req_data['status'] = ''
     error = check_build('tmp_assembly.s')
-    do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])
+    if error == 0:
+      #error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])
+      ###DEBUG IN GDBGUI  
+      try:
+        thread = threading.Thread(target=do_cmd_output, args=(req_data, ['idf.py','-C', BUILD_PATH, 'openocd']), daemon=True)
+        print("Starting thread...")
+        thread.start()
+        print(thread.is_alive())
+      except Exception as e:
+        req_data['status'] += str(e) + '\n'
+      #error = do_cmd(req_data, ['idf.py','-C', BUILD_PATH, 'gdbgui'])
 
   except Exception as e:
     req_data['status'] += str(e) + '\n'
