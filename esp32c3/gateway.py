@@ -238,27 +238,49 @@ def do_monitor_request(request):
     error = check_build('tmp_assembly.s')
     if error == 0:
       #error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])
-      ###DEBUG IN GDBGUI
-      thread = threading.Thread(
-          target=do_cmd_output,
-          args=(req_data, ['idf.py', '-C', BUILD_PATH, 'openocd']),
-          daemon=True
-      )
-      thread.start()
-      print("Starting thread...")
+      ###-------------------------------------------
+      try:
+        thread = threading.Thread(
+            target=do_cmd_output,
+            args=(req_data, ['idf.py', '-C', BUILD_PATH, 'openocd']),
+            daemon=True
+        )
+        thread.start()
+        print("Starting thread...")
 
-      # Esperar a que OpenOCD realmente arranque
-      time.sleep(2)
-      print("Verificando OpenOCD...")
-      if thread.is_alive():
-          print("OpenOCD está corriendo.")
-      else:
-          print("Error: OpenOCD no se inició correctamente.")
+        # Esperar a que OpenOCD realmente arranque
+        time.sleep(2)
+        print("Verificando OpenOCD...")
+        if thread.is_alive():
+            print("OpenOCD está corriendo.")
+        else:
+            print("Error: OpenOCD no se inició correctamente.")
+      except Exception as e:
+        print("OpenOCD")
+        req_data['status'] += str(e) + '\n'
 
       time.sleep(5)
-      error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH, 'gdbgui'])
-      if error == 0:
-        error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])
+      try:
+        threadGBD = threading.Thread(
+            target=do_cmd_output,
+            args=(req_data, ['idf.py', '-C', BUILD_PATH, 'gdbgui']),
+            daemon=True
+        )
+        threadGBD.start()
+        print("Starting thread...")
+
+        # Esperar a que OpenOCD realmente arranque
+        time.sleep(2)
+        print("Verificando OpenOCD...")
+        if threadGBD.is_alive():
+            print("GBD está corriendo.")
+        else:
+            print("Error: GDB no se inició correctamente.")
+      except Exception as e:
+        print("GDBGUI")
+        req_data['status'] += str(e) + '\n'     
+      #if error == 0:
+        #error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])     
 
   except Exception as e:
     req_data['status'] += str(e) + '\n'
