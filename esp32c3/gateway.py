@@ -25,15 +25,41 @@ from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS, cross_origin
 import subprocess, os, signal, time
 import threading
+import select
 
 BUILD_PATH = './creator' #By default we call the classics ;)
 
-class GDBExceptionError(Exception):
-    """Excepción personalizada para errores de GDB."""
-    pass
+def read_output(process):
+    while True:
+        # Leer stdout
+        output = process.stdout.readline()
+        if output:
+            print(f"Salida estándar: {output.strip()}")
+
+        # Leer stderr
+        error_output = process.stderr.readline()
+        if "OpenOCD already running" in error_output:
+            #print(f"Salida de error: {error_output.strip()}")
+            pass
+        elif "Please list all processes to check if OpenOCD is already running" in error_output:
+          commands = "ps aux | grep '[o]penocd' | awk '{print $2}' | xargs kill -9"
+          subprocess.run(commands, shell=True, capture_output=False, timeout=120, check=True)
+
+          # Matar procesos de gdbgui
+          commands = "ps aux | grep '[g]dbgui' | awk '{print $2}' | xargs kill -9"
+          subprocess.run(commands, shell=True, capture_output=False, timeout=120, check=True)
+
+        elif error_output:
+          print(f"Salida de error: {error_output.strip()}")
+
+        # Comprobar si el proceso ha terminado
+        if process.poll() is not None:
+            break
+
 
 def monitor_gdb_output(req_data, cmd_args):
     try:
+        print('A')
         # Ejecutar el comando idf.py con GDB
         process = subprocess.Popen(
             cmd_args,
@@ -41,34 +67,18 @@ def monitor_gdb_output(req_data, cmd_args):
             stderr=subprocess.PIPE,
             text=True
         )
+        # Crear un hilo para leer la salida
+        output_thread = threading.Thread(target=read_output, args=(process,))
+        output_thread.start()
+
+        # El hilo leerá la salida sin bloquear el proceso principal
+        output_thread.join()  # Esperar a que el hilo termine
+
         
-        # Leer la salida y error
-        stdout, stderr = process.communicate()
-
-        # Verificar si se ha lanzado un error específico
-        if "OpenOCD already running" in stderr: #Ya está corriendo
-            print("OpenOCD ya está corriendo.")
-            pass
-        if "terminate called after throwing an instance of 'gdb_exception_error'" in stderr:
-            print("Error: GDB lanzó una excepción.")
-
-        # Aquí podrías hacer más verificaciones o procesar la salida
-        if stdout:
-            print("stdout: "+ stdout)
-        if stderr:
-            print("stderr: "+stderr)
-        
-        # Verificar el código de salida del proceso
-        return process.returncode  # Verificar si el proceso terminó correctamente
-
-    except GDBExceptionError as gdb_error:
-        print(f"GDB Error: {str(gdb_error)}")
-        req_data['status'] += f"GDB Error: {str(gdb_error)}\n"
-        return False
+    
     except Exception as e:
-        print(f"Error inesperado: {str(e)}")
-        req_data['status'] += f"Error: {str(e)}\n"
-        return False
+        print(f"Error al ejecutar el comando: {e}")
+        return -1  # Devolver un código de error en caso de fallo
 
 
 # (1) Get form values
@@ -197,8 +207,6 @@ def creator_build(file_in, file_out):
     print("Error adapting assembly file: ", str(e))
     return -1
 
-
-
 def do_cmd(req_data, cmd_array):
     """
     Execute a command and handle the output.
@@ -206,8 +214,7 @@ def do_cmd(req_data, cmd_array):
     try:
         # Execute the command normally
         result = subprocess.run(cmd_array, capture_output=False, timeout=120, check=True)    
-    except subprocess.CalledProcessError as e:
-        print(e)
+    except:
         pass
 
     if result.stdout != None:
@@ -281,6 +288,7 @@ def do_monitor_request(request):
     target_device      = req_data['target_port']
     req_data['status'] = ''
     error = check_build('tmp_assembly.s')
+    
     if error == 0:
       #error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])
       ###-------------------------------------------
@@ -294,42 +302,35 @@ def do_monitor_request(request):
         print("Starting thread...")
 
         # Esperar a que OpenOCD realmente arranque
-        time.sleep(2)
         print("Verificando OpenOCD...")
-        if thread.is_alive():
-            print("OpenOCD está corriendo.")
-        else:
-            print("Error: OpenOCD no se inició correctamente.")
+
+        while(thread.is_alive()==False):
+          time.sleep(1)
+
+        try:
+          route = BUILD_PATH + '/gdbinit'
+          threadGBD = threading.Thread(
+              target=monitor_gdb_output,
+              args=(req_data, ['idf.py', '-C', BUILD_PATH, 'gdbgui', "-x",route]),
+              daemon=True
+          )
+          threadGBD.start()
+          print("Starting thread...")
+          if threadGBD.is_alive():
+            print ("GBDGUI started")
+        except Exception as e:
+          print("GDBGUI")
+          req_data['status'] += str(e) + '\n'     
       except Exception as e:
-        print("OpenOCD:"+str(e))
+        print("OpenOCD")
         req_data['status'] += str(e) + '\n'
 
-      time.sleep(5)
-      try:
-        route = BUILD_PATH + '/gdbinit'
-        threadGBD = threading.Thread(
-            target=monitor_gdb_output,
-            args=(req_data, ['idf.py', '-C', BUILD_PATH, 'gdbgui', '-x', route]),
-            daemon=True
-        )
-        threadGBD.start()
-        print("Starting thread...")
-
-        # Esperar a que OpenOCD realmente arranque
-        time.sleep(2)
-        print("Verificando GDB...")
-        if threadGBD.is_alive():
-            print("GBD está corriendo.")
-        else:
-            print("Error: GDB no se inició correctamente.")
-      except Exception as e:
-        print("GDBGUI:"+str(e))
-        req_data['status'] += str(e) + '\n'     
+      
       #if error == 0:
         #error = do_cmd(req_data, ['idf.py', '-C', BUILD_PATH,'-p', target_device, 'monitor'])     
 
   except Exception as e:
-    print(e)
+    req_data['status'] += str(e) + '\n'
 
   return jsonify(req_data)
 
